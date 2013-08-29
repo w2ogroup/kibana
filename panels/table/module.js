@@ -6,14 +6,14 @@
 
   ### Parameters
   * size :: Number of events per page to show
-  * pages :: Number of pages to show. size * pages = number of cached events. 
+  * pages :: Number of pages to show. size * pages = number of cached events.
              Bigger = more memory usage byh the browser
   * offset :: Position from which to start in the array of hits
   * sort :: An array with 2 elements. sort[0]: field, sort[1]: direction ('asc' or 'desc')
   * style :: hash of css properties
   * fields :: columns to show in table
   * overflow :: 'height' or 'min-height' controls wether the row will expand (min-height) to
-                to fit the table, or if the table will scroll to fit the row (height) 
+                to fit the table, or if the table will scroll to fit the row (height)
   * trimFactor :: If line is > this many characters, divided by the number of columns, trim it.
   * sortable :: Allow sorting?
   * spyable :: Show the 'eye' icon that reveals the last ES query for this panel
@@ -26,6 +26,10 @@ angular.module('kibana.table', [])
 .controller('table', function($rootScope, $scope, fields, querySrv, dashboard, filterSrv) {
 
   $scope.panelMeta = {
+    editorTabs : [
+      {title:'Paging', src:'panels/table/pagination.html'},
+      {title:'Queries', src:'partials/querySelect.html'}
+    ],
     status: "Stable",
     description: "A paginated table of records matching your query or queries. Click on a row to "+
       "expand it and review all of the fields associated with that document. <p>"
@@ -52,6 +56,7 @@ angular.module('kibana.table', [])
     paging  : true,
     field_list: true,
     trimFactor: 300,
+    normTimes : true,
     spyable : true
   };
   _.defaults($scope.panel,_d);
@@ -61,8 +66,11 @@ angular.module('kibana.table', [])
 
     $scope.$on('refresh',function(){$scope.get_data();});
 
+    $scope.fields = fields;
     $scope.get_data();
   };
+
+  $scope.percent = kbn.to_percent;
 
   $scope.toggle_micropanel = function(field) {
     var docs = _.pluck($scope.data,'_source');
@@ -72,6 +80,11 @@ angular.module('kibana.table', [])
       related : kbn.get_related_fields(docs,field),
       count: _.countBy(docs,function(doc){return _.contains(_.keys(doc),field);})['true']
     };
+  };
+
+  $scope.micropanelColor = function(index) {
+    var _c = ['bar-success','bar-warning','bar-danger','bar-info','bar-primary'];
+    return index > _c.length ? '' : _c[index];
   };
 
   $scope.set_sort = function(field) {
@@ -97,7 +110,7 @@ angular.module('kibana.table', [])
     } else {
       $scope.panel.highlight.push(field);
     }
-  };  
+  };
 
   $scope.toggle_details = function(row) {
     row.kibana = row.kibana || {};
@@ -134,7 +147,7 @@ angular.module('kibana.table', [])
     if(dashboard.indices.length === 0) {
       return;
     }
-    
+
     $scope.panelMeta.loading = true;
 
     $scope.panel.queries.ids = querySrv.idsByMode($scope.panel.queries);
@@ -188,17 +201,21 @@ angular.module('kibana.table', [])
         $scope.data= $scope.data.concat(_.map(results.hits.hits, function(hit) {
           return {
             _source   : kbn.flatten_json(hit._source),
-            highlight : kbn.flatten_json(hit.highlight||{})
+            highlight : kbn.flatten_json(hit.highlight||{}),
+            _type     : hit._type,
+            _index    : hit._index,
+            _id       : hit._id,
+            _sort     : hit.sort
           };
         }));
-        
+
         $scope.hits += results.hits.total;
 
         // Sort the data
         $scope.data = _.sortBy($scope.data, function(v){
-          return v._source[$scope.panel.sort[0]];
+          return v._sort[0];
         });
-        
+
         // Reverse if needed
         if($scope.panel.sort[1] === 'desc') {
           $scope.data.reverse();
@@ -210,17 +227,13 @@ angular.module('kibana.table', [])
       } else {
         return;
       }
-      
-      $scope.all_fields = kbn.get_all_fields(_.pluck($scope.data,'_source'));
-      fields.add_fields($scope.all_fields);
 
       // If we're not sorting in reverse chrono order, query every index for
       // size*pages results
       // Otherwise, only get size*pages results then stop querying
-      //($scope.data.length < $scope.panel.size*$scope.panel.pages
-     // || !(($scope.panel.sort[0] === $scope.time.field) && $scope.panel.sort[1] === 'desc'))
-      if($scope.data.length < $scope.panel.size*$scope.panel.pages &&
-        _segment+1 < dashboard.indices.length ) {
+      if (($scope.data.length < $scope.panel.size*$scope.panel.pages ||
+        !((_.contains(filterSrv.timeField(),$scope.panel.sort[0])) && $scope.panel.sort[1] === 'desc')) &&
+        _segment+1 < dashboard.indices.length) {
         $scope.get_data(_segment+1,$scope.query_id);
       }
 
@@ -232,14 +245,14 @@ angular.module('kibana.table', [])
   };
 
   $scope.without_kibana = function (row) {
-    return { 
+    return {
       _source   : row._source,
       highlight : row.highlight
     };
-  }; 
+  };
 
-  $scope.set_refresh = function (state) { 
-    $scope.refresh = state; 
+  $scope.set_refresh = function (state) {
+    $scope.refresh = state;
   };
 
   $scope.close_edit = function() {
@@ -271,5 +284,20 @@ angular.module('kibana.table', [])
       return text.length > length/factor ? text.substr(0,length/factor)+'...' : text;
     }
     return '';
+  };
+// WIP
+}).filter('tableFieldFormat', function(fields){
+  return function(text,field,event,scope) {
+    var type;
+    if(
+      !_.isUndefined(fields.mapping[event._index]) &&
+      !_.isUndefined(fields.mapping[event._index][event._type])
+    ) {
+      type = fields.mapping[event._index][event._type][field]['type'];
+      if(type === 'date' && scope.panel.normTimes) {
+        return moment(text).format('YYYY-MM-DD HH:mm:ss');
+      }
+    }
+    return text;
   };
 });

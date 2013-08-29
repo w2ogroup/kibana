@@ -9,7 +9,7 @@ angular.module('kibana.directives', [])
     link: function(scope, elem, attrs) {
       var template = '<i class="icon-spinner small icon-spin icon-large panel-loading" '+
         'ng-show="panelMeta.loading == true && !panel.title"></i>'+
-        ' <span class="editlink panelextra pointer" style="right:15px;top:0px" ' + 
+        ' <span class="editlink panelextra pointer" style="right:15px;top:0px" ' +
         'bs-modal="\'partials/paneleditor.html\'" ng-show="panel.editable != false">'+
         '<span class="small">{{panel.type}}</span> <i class="icon-cog pointer"></i> '+
         '</span><h4>'+
@@ -23,14 +23,15 @@ angular.module('kibana.directives', [])
 .directive('addPanel', function($compile) {
   return {
     restrict: 'A',
-    link: function(scope, elem, attrs) {
-      scope.$watch('panel.type', function(n,o) {
-        if(!_.isUndefined(scope.panel.type)) {
-          var template = '<div>'+
-          '<div ng-controller="'+scope.panel.type+'" ng-include src="\'partials/panelgeneral.html\'"></div>'+
-          '<div ng-controller="'+scope.panel.type+'" ng-include src="\''+scope.edit_path(scope.panel.type)+'\'">'+
-          '</div>';
-          elem.html($compile(angular.element(template))(scope));
+    link: function($scope, elem, attrs) {
+      $scope.$watch('panel.type', function(n,o) {
+        var _type = $scope.panel.type;
+        $scope.reset_panel(_type);
+        if(!_.isUndefined($scope.panel.type)) {
+          var template = '<div ng-controller="'+$scope.panel.type+'">'+
+            '<span ng-include src="\'partials/paneladd.html\'"></span>'+
+            '</div>';
+          elem.html($compile(angular.element(template))($scope));
         }
       });
     }
@@ -72,7 +73,7 @@ angular.module('kibana.directives', [])
       elm.bind('blur', function() {
         scope.$apply(function() {
           ngModelCtrl.$setViewValue(elm.val());
-        });         
+        });
       });
     }
   };

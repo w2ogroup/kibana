@@ -18,6 +18,9 @@ angular.module('kibana.bettermap', [])
 .controller('bettermap', function($scope, querySrv, dashboard, filterSrv) {
 
   $scope.panelMeta = {
+    editorTabs : [
+      {title:'Queries', src:'partials/querySelect.html'}
+    ],
     status  : "Experimental",
     description : "Displays geo points in clustered groups on a map. The cavaet for this panel is"+
       " that, for better or worse, it does NOT use the terms facet and it <b>does</b> query "+
@@ -58,7 +61,7 @@ angular.module('kibana.bettermap', [])
       $scope.panel.error = "Please select a field that contains geo point in [lon,lat] format";
       return;
     }
-    
+
     // Determine the field to sort on
     var timeField = _.uniq(_.pluck(filterSrv.getByType('time'),'field'));
     if(timeField.length > 1) {
@@ -72,7 +75,7 @@ angular.module('kibana.bettermap', [])
     var _segment = _.isUndefined(segment) ? 0 : segment;
 
     $scope.panel.queries.ids = querySrv.idsByMode($scope.panel.queries);
-    // This could probably be changed to a BoolFilter 
+    // This could probably be changed to a BoolFilter
     var boolQuery = $scope.ejs.BoolQuery();
     _.each($scope.panel.queries.ids,function(id) {
       boolQuery = boolQuery.should(querySrv.getEjsObj(id));
@@ -129,7 +132,7 @@ angular.module('kibana.bettermap', [])
       } else {
         return;
       }
-  
+
       $scope.$emit('draw');
 
       // Get $size results then stop querying
@@ -166,12 +169,12 @@ angular.module('kibana.bettermap', [])
 
       var map, markers, layerGroup, mcg;
 
-      function render_panel() { 
+      function render_panel() {
         scope.panelMeta.loading = false;
 
         var scripts = $LAB.script("panels/bettermap/lib/leaflet.js").wait()
           .script("panels/bettermap/lib/plugins.js");
-   
+
         //add markers dynamically
         scripts.wait(function(){
           if(_.isUndefined(map)) {

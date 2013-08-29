@@ -12,10 +12,10 @@
   * interval :: Datapoint interval in elasticsearch date math format (eg 1d, 1w, 1y, 5y)
   * fill :: Only applies to line charts. Level of area shading from 0-10
   * linewidth ::  Only applies to line charts. How thick the line should be in pixels
-                  While the editor only exposes 0-10, this can be any numeric value. 
+                  While the editor only exposes 0-10, this can be any numeric value.
                   Set to 0 and you'll get something like a scatter plot
   * timezone :: This isn't totally functional yet. Currently only supports browser and utc.
-                browser will adjust the x-axis labels to match the timezone of the user's 
+                browser will adjust the x-axis labels to match the timezone of the user's
                 browser
   * spyable ::  Dislay the 'eye' icon that show the last elasticsearch query
   * zoomlinks :: Show the zoom links?
@@ -34,9 +34,12 @@
 'use strict';
 
 angular.module('kibana.histogram', [])
-.controller('histogram', function($scope, querySrv, dashboard, filterSrv) {
+.controller('histogram', function($scope, querySrv, dashboard, filterSrv, timeSeries) {
 
   $scope.panelMeta = {
+    editorTabs : [
+      {title:'Queries', src:'partials/querySelect.html'}
+    ],
     status  : "Stable",
     description : "A bucketed time series chart of the current query or queries. Uses the "+
       "Elasticsearch date_histogram facet. If using time stamped indices this panel will query"+
@@ -53,7 +56,7 @@ angular.module('kibana.histogram', [])
     },
     value_field : null,
     auto_int    : true,
-    resolution  : 100, 
+    resolution  : 100,
     interval    : '5m',
     fill        : 0,
     linewidth   : 3,
@@ -82,7 +85,46 @@ angular.module('kibana.histogram', [])
 
   };
 
-  $scope.get_data = function(segment,query_id) {
+  /**
+   * The time range effecting the panel
+   * @return {[type]} [description]
+   */
+  $scope.get_time_range = function () {
+    var range = $scope.range = filterSrv.timeRange('min');
+    return range;
+  };
+
+  $scope.get_interval = function () {
+    var interval = $scope.panel.interval,
+                    range;
+    if ($scope.panel.auto_int) {
+      range = $scope.get_time_range();
+      if (range) {
+        interval = kbn.secondsToHms(
+          kbn.calculate_interval(range.from, range.to, $scope.panel.resolution, 0) / 1000
+        );
+      }
+    }
+    $scope.panel.interval = interval || '10m';
+    return $scope.panel.interval;
+  };
+
+  /**
+   * Fetch the data for a chunk of a queries results. Multiple segments occur when several indicies
+   * need to be consulted (like timestamped logstash indicies)
+   *
+   * The results of this function are stored on the scope's data property. This property will be an
+   * array of objects with the properties info, time_series, and hits. These objects are used in the
+   * render_panel function to create the historgram.
+   *
+   * @param {number} segment   The segment count, (0 based)
+   * @param {number} query_id  The id of the query, generated on the first run and passed back when
+   *                            this call is made recursively for more segments
+   */
+  $scope.get_data = function(segment, query_id) {
+    if (_.isUndefined(segment)) {
+      segment = 0;
+    }
     delete $scope.panel.error;
 
     // Make sure we have everything for the request to complete
@@ -91,16 +133,16 @@ angular.module('kibana.histogram', [])
     }
 
 
-    var _range = $scope.range = filterSrv.timeRange('min');
-    
+    var _range = $scope.get_time_range();
+    var _interval = $scope.get_interval(_range);
+
     if ($scope.panel.auto_int) {
       $scope.panel.interval = kbn.secondsToHms(
         kbn.calculate_interval(_range.from,_range.to,$scope.panel.resolution,0)/1000);
     }
 
     $scope.panelMeta.loading = true;
-    var _segment = _.isUndefined(segment) ? 0 : segment;
-    var request = $scope.ejs.Request().indices(dashboard.indices[_segment]);
+    var request = $scope.ejs.Request().indices(dashboard.indices[segment]);
 
     $scope.panel.queries.ids = querySrv.idsByMode($scope.panel.queries);
     // Build the query
@@ -111,7 +153,7 @@ angular.module('kibana.histogram', [])
       );
 
       var facet = $scope.ejs.DateHistogramFacet(id);
-      
+
       if($scope.panel.mode === 'count') {
         facet = facet.field($scope.panel.time_field);
       } else {
@@ -121,7 +163,7 @@ angular.module('kibana.histogram', [])
         }
         facet = facet.keyField($scope.panel.time_field).valueField($scope.panel.value_field);
       }
-      facet = facet.interval($scope.panel.interval).facetFilter($scope.ejs.QueryFilter(query));
+      facet = facet.interval(_interval).facetFilter($scope.ejs.QueryFilter(query));
       request = request.facet(facet).size(0);
     });
 
@@ -134,12 +176,12 @@ angular.module('kibana.histogram', [])
     // Populate scope when we have results
     results.then(function(results) {
       $scope.panelMeta.loading = false;
-      if(_segment === 0) {
+      if(segment === 0) {
         $scope.hits = 0;
         $scope.data = [];
         query_id = $scope.query_id = new Date().getTime();
       }
-      
+
       // Check for error and abort if found
       if(!(_.isUndefined(results.error))) {
         $scope.panel.error = $scope.parse_error(results.error);
@@ -150,48 +192,40 @@ angular.module('kibana.histogram', [])
       var facetIds = _.map(_.keys(results.facets),function(k){return parseInt(k, 10);});
 
       // Make sure we're still on the same query/queries
-      if($scope.query_id === query_id && 
-        _.intersection(facetIds,$scope.panel.queries.ids).length === $scope.panel.queries.ids.length
-        ) {
+      if($scope.query_id === query_id && _.difference(facetIds, $scope.panel.queries.ids).length === 0) {
 
-        var i = 0;
-        var data, hits;
+        var i = 0,
+          time_series,
+          hits;
 
         _.each($scope.panel.queries.ids, function(id) {
-          var v = results.facets[id];
-
-          // Null values at each end of the time range ensure we see entire range
-          if(_.isUndefined($scope.data[i]) || _segment === 0) {
-            data = [];
-            if(filterSrv.idsByType('time').length > 0) {
-              data = [[_range.from.getTime(), null],[_range.to.getTime(), null]];
-              //data = [];
-            }
+          var query_results = results.facets[id];
+          // we need to initialize the data variable on the first run,
+          // and when we are working on the first segment of the data.
+          if(_.isUndefined($scope.data[i]) || segment === 0) {
+            time_series = new timeSeries.ZeroFilled({
+              interval: _interval,
+              start_date: _range && _range.from,
+              end_date: _range && _range.to,
+              fill_style: 'minimal'
+            });
             hits = 0;
           } else {
-            data = $scope.data[i].data;
+            time_series = $scope.data[i].time_series;
             hits = $scope.data[i].hits;
           }
 
-          // Assemble segments
-          var segment_data = [];
-          _.each(v.entries, function(v, k) {
-            segment_data.push([v.time,v[$scope.panel.mode]]);
-            hits += v.count; // The series level hits counter
-            $scope.hits += v.count; // Entire dataset level hits counter
+          // push each entry into the time series, while incrementing counters
+          _.each(query_results.entries, function(entry) {
+            time_series.addValue(entry.time, entry[$scope.panel.mode]);
+            hits += entry.count; // The series level hits counter
+            $scope.hits += entry.count; // Entire dataset level hits counter
           });
-          data.splice.apply(data,[1,0].concat(segment_data)); // Join histogram data
-
-          // Create the flot series object
-          var series = { 
-            data: {
-              info: querySrv.list[id],
-              data: data,
-              hits: hits
-            },
+          $scope.data[i] = {
+            info: querySrv.list[id],
+            time_series: time_series,
+            hits: hits
           };
-
-          $scope.data[i] = series.data;
 
           i++;
         });
@@ -200,10 +234,9 @@ angular.module('kibana.histogram', [])
         $scope.$emit('render');
 
         // If we still have segments left, get them
-        if(_segment < dashboard.indices.length-1) {
-          $scope.get_data(_segment+1,query_id);
+        if(segment < dashboard.indices.length-1) {
+          $scope.get_data(segment+1,query_id);
         }
-      
       }
     });
   };
@@ -235,7 +268,7 @@ angular.module('kibana.histogram', [])
       to:moment.utc(_to),
       field:$scope.panel.time_field
     });
-    
+
     dashboard.refresh();
 
   };
@@ -245,8 +278,8 @@ angular.module('kibana.histogram', [])
     $scope.inspector = angular.toJson(JSON.parse(request.toString()),true);
   };
 
-  $scope.set_refresh = function (state) { 
-    $scope.refresh = state; 
+  $scope.set_refresh = function (state) {
+    $scope.refresh = state;
   };
 
   $scope.close_edit = function() {
@@ -268,7 +301,7 @@ angular.module('kibana.histogram', [])
       scope.$on('render',function(){
         render_panel();
       });
-  
+
       // Re-render if the window is resized
       angular.element(window).bind('resize', function(){
         render_panel();
@@ -279,10 +312,10 @@ angular.module('kibana.histogram', [])
 
         // IE doesn't work without this
         elem.css({height:scope.panel.height||scope.row.height});
-        
+
         // Populate from the query service
         try {
-          _.each(scope.data,function(series) {
+          _.each(scope.data, function(series) {
             series.label = series.info.alias;
             series.color = series.info.color;
           });
@@ -296,32 +329,43 @@ angular.module('kibana.histogram', [])
           .script("common/lib/panels/jquery.flot.stack.js")
           .script("common/lib/panels/jquery.flot.selection.js")
           .script("common/lib/panels/timezone.js");
-                    
+
         // Populate element. Note that jvectormap appends, does not replace.
         scripts.wait(function(){
           var stack = scope.panel.stack ? true : null;
 
           // Populate element
-          try { 
+          try {
             var options = {
               legend: { show: false },
               series: {
                 //stackpercent: scope.panel.stack ? scope.panel.percentage : false,
                 stack: scope.panel.percentage ? null : stack,
-                lines:  { 
-                  show: scope.panel.lines, 
-                  fill: scope.panel.fill/10, 
+                lines:  {
+                  show: scope.panel.lines,
+                  fill: scope.panel.fill/10,
                   lineWidth: scope.panel.linewidth,
                   steps: false
                 },
-                bars:   { show: scope.panel.bars,  fill: 1, barWidth: barwidth/1.8, zero: false },
-                points: { show: scope.panel.points, fill: 1, fillColor: false, radius: 5},
+                bars:   {
+                  show: scope.panel.bars,
+                  fill: 1,
+                  barWidth: barwidth/1.8,
+                  zero: false,
+                  lineWidth: 0
+                },
+                points: {
+                  show: scope.panel.points,
+                  fill: 1,
+                  fillColor: false,
+                  radius: 5
+                },
                 shadowSize: 1
               },
-              yaxis: { 
-                show: scope.panel['y-axis'], 
-                min: 0, 
-                max: scope.panel.percentage && scope.panel.stack ? 100 : null, 
+              yaxis: {
+                show: scope.panel['y-axis'],
+                min: 0,
+                max: scope.panel.percentage && scope.panel.stack ? 100 : null,
               },
               xaxis: {
                 timezone: scope.panel.timezone,
@@ -344,6 +388,19 @@ angular.module('kibana.histogram', [])
               options.selection = { mode: "x", color: '#666' };
             }
 
+            // when rendering stacked bars, we need to ensure each point that has data is zero-filled
+            // so that the stacking happens in the proper order
+            var required_times = [];
+            if (scope.data.length > 1) {
+              required_times = _.uniq(Array.prototype.concat.apply([], _.map(scope.data, function (query) {
+                return query.time_series.getOrderedTimes();
+              })).sort(), true);
+            }
+
+            for (var i = 0; i < scope.data.length; i++) {
+              scope.data[i].data = scope.data[i].time_series.getFlotPairs(required_times);
+            }
+
             scope.plot = $.plot(elem, scope.data, options);
 
           } catch(e) {
@@ -363,37 +420,22 @@ angular.module('kibana.histogram', [])
         if(_int >= 60) {
           return "%H:%M<br>%m/%d";
         }
-        
+
         return "%H:%M:%S";
       }
 
-      function tt(x, y, contents) {
-        // If the tool tip already exists, don't recreate it, just update it
-        var tooltip = $('#pie-tooltip').length ? 
-          $('#pie-tooltip') : $('<div id="pie-tooltip"></div>');
-
-        tooltip.html(contents).css({
-          position: 'absolute',
-          top     : y + 5,
-          left    : x + 5,
-          color   : "#c8c8c8",
-          padding : '10px',
-          'font-size': '11pt',
-          'font-weight' : 200,
-          'background-color': '#1f1f1f',
-          'border-radius': '5px',
-        }).appendTo("body");
-      }
-
+      var $tooltip = $('<div>');
       elem.bind("plothover", function (event, pos, item) {
         if (item) {
-          tt(pos.pageX, pos.pageY,
-            "<div style='vertical-align:middle;display:inline-block;background:"+
-            item.series.color+";height:15px;width:15px;border-radius:10px;'></div> "+
-            item.datapoint[1].toFixed(0) + " @ " + 
-            moment(item.datapoint[0]).format('MM/DD HH:mm:ss'));
+          $tooltip
+            .html(
+              kbn.query_color_dot(item.series.color, 15) + ' ' +
+              item.datapoint[1].toFixed(0) + " @ " +
+              moment(item.datapoint[0]).format('MM/DD HH:mm:ss')
+            )
+            .place_tt(pos.pageX, pos.pageY);
         } else {
-          $("#pie-tooltip").remove();
+          $tooltip.detach();
         }
       });
 
@@ -408,4 +450,170 @@ angular.module('kibana.histogram', [])
       });
     }
   };
+})
+.service('timeSeries', function () {
+  // map compatable parseInt
+  function base10Int(val) {
+    return parseInt(val, 10);
+  }
+
+  function getDatesTime(date) {
+    return Math.floor(date.getTime() / 1000)*1000;
+  }
+
+  /**
+   * Certain graphs require 0 entries to be specified for them to render
+   * properly (like the line graph). So with this we will caluclate all of
+   * the expected time measurements, and fill the missing ones in with 0
+   * @param {object} opts  An object specifying some/all of the options
+   *
+   * OPTIONS:
+   * @opt   {string}   interval    The interval notion describing the expected spacing between
+   *                                each data point.
+   * @opt   {date}     start_date  (optional) The start point for the time series, setting this and the
+   *                                end_date will ensure that the series streches to resemble the entire
+   *                                expected result
+   * @opt   {date}     end_date    (optional) The end point for the time series, see start_date
+   * @opt   {string}   fill_style  Either "minimal", or "all" describing the strategy used to zero-fill
+   *                                the series.
+   */
+  this.ZeroFilled = function (opts) {
+    opts = _.defaults(opts, {
+      interval: '10m',
+      start_date: null,
+      end_date: null,
+      fill_style: 'minimal'
+    });
+
+    // the expected differenece between readings.
+    this.interval_ms = base10Int(kbn.interval_to_seconds(opts.interval)) * 1000;
+
+    // will keep all values here, keyed by their time
+    this._data = {};
+    this.start_time = opts.start_date && getDatesTime(opts.start_date);
+    this.end_time = opts.end_date && getDatesTime(opts.end_date);
+    this.opts = opts;
+  };
+
+  /**
+   * Add a row
+   * @param {int}  time  The time for the value, in
+   * @param {any}  value The value at this time
+   */
+  this.ZeroFilled.prototype.addValue = function (time, value) {
+    if (time instanceof Date) {
+      time = getDatesTime(time);
+    } else {
+      time = base10Int(time);
+    }
+    if (!isNaN(time)) {
+      this._data[time] = (_.isUndefined(value) ? 0 : value);
+    }
+    this._cached_times = null;
+  };
+
+  /**
+   * Get an array of the times that have been explicitly set in the series
+   * @param  {array} include (optional) list of timestamps to include in the response
+   * @return {array} An array of integer times.
+   */
+  this.ZeroFilled.prototype.getOrderedTimes = function (include) {
+    var times = _.map(_.keys(this._data), base10Int);
+    if (_.isArray(include)) {
+      times = times.concat(include);
+    }
+    return _.uniq(times.sort(), true);
+  };
+
+  /**
+   * return the rows in the format:
+   * [ [time, value], [time, value], ... ]
+   *
+   * Heavy lifting is done by _get(Min|All)FlotPairs()
+   * @param  {array} required_times  An array of timestamps that must be in the resulting pairs
+   * @return {array}
+   */
+  this.ZeroFilled.prototype.getFlotPairs = function (required_times) {
+    var times = this.getOrderedTimes(required_times),
+      strategy,
+      pairs,
+      pairs_empty;
+
+    if(this.opts.fill_style === 'all') {
+      strategy = this._getAllFlotPairs;
+    } else {
+      strategy = this._getMinFlotPairs;
+    }
+
+    pairs = _.reduce(
+      times,    // what
+      strategy, // how
+      [],       // where
+      this      // context
+    );
+
+    // if the start and end of the pairs are inside either the start or end time,
+    // add those times to the series with null values so the graph will stretch to contain them.
+    if (this.start_time && (pairs.length === 0 || pairs[0][0] > this.start_time)) {
+      pairs.unshift([this.start_time, null]);
+    }
+    if (this.end_time && (pairs.length === 0 || pairs[pairs.length - 1][0] < this.end_time)) {
+      pairs.push([this.end_time, null]);
+    }
+
+    return pairs;
+  };
+
+  /**
+   * ** called as a reduce stragegy in getFlotPairs() **
+   * Fill zero's on either side of the current time, unless there is already a measurement there or
+   * we are looking at an edge.
+   * @return {array} An array of points to plot with flot
+   */
+  this.ZeroFilled.prototype._getMinFlotPairs = function (result, time, i, times) {
+    var next, expected_next, prev, expected_prev;
+
+    // check for previous measurement
+    if (i > 0) {
+      prev = times[i - 1];
+      expected_prev = time - this.interval_ms;
+      if (prev < expected_prev) {
+        result.push([expected_prev, 0]);
+      }
+    }
+
+    // add the current time
+    result.push([ time, this._data[time] || 0 ]);
+
+    // check for next measurement
+    if (times.length > i) {
+      next = times[i + 1];
+      expected_next = time + this.interval_ms;
+      if (next > expected_next) {
+        result.push([expected_next, 0]);
+      }
+    }
+
+    return result;
+  };
+
+  /**
+   * ** called as a reduce stragegy in getFlotPairs() **
+   * Fill zero's to the right of each time, until the next measurement is reached or we are at the
+   * last measurement
+   * @return {array}  An array of points to plot with flot
+   */
+  this.ZeroFilled.prototype._getAllFlotPairs = function (result, time, i, times) {
+    var next, expected_next;
+
+    result.push([ times[i], this._data[times[i]] || 0 ]);
+    next = times[i + 1];
+    expected_next = times[i] + this.interval_ms;
+    for(; times.length > i && next > expected_next; expected_next+= this.interval_ms) {
+      result.push([expected_next, 0]);
+    }
+
+    return result;
+  };
+
 });
