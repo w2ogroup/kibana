@@ -1,10 +1,14 @@
 define([
   'angular',
+  'jquery',
+  'kbn',
   'underscore',
   'config',
-  'modernizr'
+  'moment',
+  'modernizr',
+  'filesaver'
 ],
-function (angular, _, config, Modernizr) {
+function (angular, $, kbn, _, config, moment, Modernizr) {
   'use strict';
 
   var module = angular.module('kibana.services');
@@ -19,6 +23,7 @@ function (angular, _, config, Modernizr) {
       style: "dark",
       editable: true,
       failover: false,
+      panel_hints: true,
       rows: [],
       services: {},
       loader: {
@@ -240,7 +245,7 @@ function (angular, _, config, Modernizr) {
 
     this.file_load = function(file) {
       return $http({
-        url: "app/dashboards/"+file,
+        url: "app/dashboards/"+file+'?' + new Date().getTime(),
         method: "GET",
         transformResponse: function(response) {
           return renderTemplate(response,$routeParams);
@@ -280,12 +285,12 @@ function (angular, _, config, Modernizr) {
 
     this.script_load = function(file) {
       return $http({
-        url: "dashboards/"+file,
+        url: "app/dashboards/"+file,
         method: "GET",
         transformResponse: function(response) {
           /*jshint -W054 */
-          var _f = new Function("ARGS",response);
-          return _f($routeParams);
+          var _f = new Function('ARGS','kbn','_','moment','window','document','angular','require','define','$','jQuery',response);
+          return _f($routeParams,kbn,_,moment);
         }
       }).then(function(result) {
         if(!result) {
