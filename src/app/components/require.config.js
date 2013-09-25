@@ -3,6 +3,7 @@
  */
 require.config({
   baseUrl: 'app',
+  // urlArgs: 'r=@REV@',
   paths: {
     config:                   '../config',
     settings:                 'components/settings',
@@ -31,6 +32,7 @@ require.config({
     'jquery.flot.pie':        '../vendor/jquery/jquery.flot.pie',
     'jquery.flot.selection':  '../vendor/jquery/jquery.flot.selection',
     'jquery.flot.stack':      '../vendor/jquery/jquery.flot.stack',
+    'jquery.flot.stackpercent':'../vendor/jquery/jquery.flot.stackpercent',
     'jquery.flot.time':       '../vendor/jquery/jquery.flot.time',
 
     modernizr:                '../vendor/modernizr-2.6.1',
@@ -38,12 +40,10 @@ require.config({
   },
   shim: {
     underscore: {
-      // requiring should work, but isn't required
       exports: '_'
     },
 
     angular: {
-      // requiring should work, but isn't required
       deps: ['jquery'],
       exports: 'angular'
     },
@@ -60,11 +60,12 @@ require.config({
       exports: 'jQuery'
     },
 
-    // simple dependency declatation
+    // simple dependency declaration
     'jquery.flot':          ['jquery'],
     'jquery.flot.pie':      ['jquery', 'jquery.flot'],
     'jquery.flot.selection':['jquery', 'jquery.flot'],
     'jquery.flot.stack':    ['jquery', 'jquery.flot'],
+    'jquery.flot.stackpercent':['jquery', 'jquery.flot'],
     'jquery.flot.time':     ['jquery', 'jquery.flot'],
 
     'angular-sanitize':     ['angular'],
