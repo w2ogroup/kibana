@@ -13,7 +13,7 @@ function (angular, $, kbn, _, config, moment, Modernizr) {
 
   var module = angular.module('kibana.services');
 
-  module.service('dashboard', function($routeParams, $http, $rootScope, $injector,
+  module.service('dashboard', function($routeParams, $http, $rootScope, $injector, $location,
     ejsResource, timer, kbnIndex, alertSrv
   ) {
     // A hash of defaults to use when loading a dashboard
@@ -116,12 +116,14 @@ function (angular, $, kbn, _, config, moment, Modernizr) {
             if(p.length > 0) {
               self.indices = p;
             } else {
-              //TODO: Option to not failover
+              // Option to not failover
               if(self.current.failover) {
                 self.indices = [self.current.index.default];
               } else {
                 // Do not issue refresh if no indices match. This should be removed when panels
                 // properly understand when no indices are present
+                alertSrv.set('No results','There were no results because no indices were found that match your'+
+                  ' selected time span','info',5000);
                 return false;
               }
             }
@@ -204,6 +206,7 @@ function (angular, $, kbn, _, config, moment, Modernizr) {
     this.set_default = function(dashboard) {
       if (Modernizr.localstorage) {
         window.localStorage['dashboard'] = angular.toJson(dashboard || self.current);
+        $location.path('/dashboard');
         return true;
       } else {
         return false;
@@ -329,6 +332,9 @@ function (angular, $, kbn, _, config, moment, Modernizr) {
       return request.doIndex(
         // Success
         function(result) {
+          if(type === 'dashboard') {
+            $location.path('/dashboard/elasticsearch/'+title);
+          }
           return result;
         },
         // Failure
@@ -406,7 +412,6 @@ function (angular, $, kbn, _, config, moment, Modernizr) {
         return false;
       });
     };
-
   });
 
 });
